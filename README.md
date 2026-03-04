@@ -6,6 +6,7 @@
 
 3. Tesseract also needs to be installed at the OS level
 
+4. Download parquet files from hugging face and put them under data/ folder.
 
 Note:
 
