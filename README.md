@@ -10,7 +10,8 @@
 
 Note:
 
-Model training is commented out in invoice_trainer.py and
-inference on test data is enabled.
+When main function in invoice_trainer.py is executed, the model trains and validates
+and then gives a prediction in terminal in a format described below.
+
 The output looks like [sample index] entropy = float labels = [512 nos (0,1,2)]
 
