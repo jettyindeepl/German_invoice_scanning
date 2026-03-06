@@ -4,7 +4,6 @@ import os
 import pickle
 
 import torch
-import pandas as pd
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from transformers import LayoutLMv3Processor
@@ -12,6 +11,8 @@ from transformers import LayoutLMv3Processor
 from layout_approach import LayoutLMv3MCDropoutForNER, ner_ce_loss, collate_fn, mc_predict_ner
 
 from bio_tagging import process_dataset
+from datasets import load_dataset
+
 
 
 class InvoiceQADataset(Dataset):
@@ -73,12 +74,12 @@ class InvoiceTrainer:
         self.processor = LayoutLMv3Processor.from_pretrained(self.model_name, apply_ocr=False)
         self.model = LayoutLMv3MCDropoutForNER(self.model_name, self.dropout_p).to(self.device)
 
-    def _load_or_cache(self, parquet_path, cache_path):
+    def _load_or_cache(self, dataset_split, cache_path):
         if os.path.exists(cache_path):
             print(f"Loading cache: {cache_path}")
             with open(cache_path, "rb") as f:
                 return pickle.load(f)
-        df = pd.read_parquet(parquet_path)
+        df = dataset_split.to_pandas()
         samples = process_dataset(df)
         os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
         with open(cache_path, "wb") as f:
@@ -86,11 +87,11 @@ class InvoiceTrainer:
         print(f"Cached {len(samples)} samples to {cache_path}")
         return samples
 
-    def load_data(self, train_parquet_path, val_parquet_path):
+    def load_data(self, train_split, val_split):
         assert self.processor is not None, "Call setup() before load_data()."
 
-        train_samples = [s for s in self._load_or_cache(train_parquet_path, self.train_cache_path) if s["found"]]
-        val_samples   = [s for s in self._load_or_cache(val_parquet_path,   self.val_cache_path)   if s["found"]]
+        train_samples = [s for s in self._load_or_cache(train_split, self.train_cache_path) if s["found"]]
+        val_samples   = [s for s in self._load_or_cache(val_split,   self.val_cache_path)   if s["found"]]
 
         self.n_train = len(train_samples)
         self.n_val   = len(val_samples)
@@ -184,11 +185,11 @@ class InvoiceTrainer:
     def mc_uncertainty(self, batch, n_samples=20):
         return mc_predict_ner(self.model, batch, n_samples=n_samples, device=self.device)
 
-    def predict(self, test_parquet_path, ckpt_path=None, n_samples=20):
+    def predict(self, test_split, ckpt_path=None, n_samples=20):
         if ckpt_path:
             self.model.load_state_dict(torch.load(ckpt_path, map_location=self.device))
             print(f"Loaded checkpoint: {ckpt_path}")
-        samples = process_dataset(pd.read_parquet(test_parquet_path))
+        samples = process_dataset(test_split.to_pandas())
         _collate = lambda batch: collate_fn(batch, processor=self.processor, max_length=self.max_length)
         loader = DataLoader(InvoiceQADataset(samples), batch_size=self.batch_size, shuffle=False, collate_fn=_collate)
 
@@ -244,20 +245,17 @@ class InvoiceTrainer:
 
 
 def main():
-    TRAIN_PARQUET = "data/train-00000-of-00001-07d07b95f758bb43.parquet"
-    VAL_PARQUET   = "data/validation-00000-of-00001-65b5f201e7b25155.parquet"
-    TEST_PARQUET  = "data/test-00000-of-00001-a9d41ee534bb86d0.parquet"
+    ds = load_dataset("Aoschu/donut_model_data_for_german_invoice")
 
     trainer = InvoiceTrainer(dropout_p=0.1, entity_weight=20.0, head_lr=1e-3)
     trainer.setup()
-    trainer.load_data(TRAIN_PARQUET, VAL_PARQUET)
+    trainer.load_data(ds["train"], ds["validation"])
     trainer.train(num_epochs=10)
     trainer.plot(save_path="results/mc_dropout_curves.png")
 
     infer = InvoiceTrainer()
     infer.setup()
-    #results = infer.predict(TEST_PARQUET, ckpt_path="checkpoints/checkpoint_epoch_10.pt")
-    results = infer.predict(TEST_PARQUET, ckpt_path="checkpoints/checkpoint_epoch_8.pt", n_samples=20)
+    results = infer.predict(ds["test"], ckpt_path="checkpoints/checkpoint_epoch_8.pt", n_samples=20)
     print(f"\nPredictions on {len(results)} test samples:")
     for i, r in enumerate(results):
         print(f"  [{i:>4}] entropy={r['entropy']:.4f}  labels={r['pred_labels']}")
