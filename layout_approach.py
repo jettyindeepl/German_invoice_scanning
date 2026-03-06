@@ -35,7 +35,7 @@ def ner_ce_loss(logits, labels, entity_weight=5.0):
     weights = torch.ones(C, device=logits.device)
     weights[1:] = entity_weight
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100, weight=weights)
-    return loss_fn(logits.view(B * L, C), labels.view(B * L))
+    return loss_fn(logits.reshape(B * L, C), labels.reshape(B * L))
 
 
 def build_token_labels(word_ids, word_bio):

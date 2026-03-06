@@ -35,6 +35,11 @@ FIELDS = [
     "Telefonnummer",
 ]
 
+# Typed BIO label set: O, B-<field>, I-<field>
+LABEL_LIST = ["O"] + [f"B-{f}" for f in FIELDS] + [f"I-{f}" for f in FIELDS]
+label2id   = {l: i for i, l in enumerate(LABEL_LIST)}
+id2label   = {i: l for l, i in label2id.items()}
+
 # Human-readable question prompts for each field
 FIELD_QUESTIONS = {
     "Der Name der Bank":      "Was ist der Name der Bank?",
@@ -51,7 +56,35 @@ FIELD_QUESTIONS = {
 
 
 # -----------------------------------------------
-# 3. OCR Helper
+# 3. BIO Label Builder
+# -----------------------------------------------
+
+def build_bio_labels(ocr_words: list, spans: dict) -> list:
+    """
+    Convert per-field span annotations into a typed BIO label sequence.
+
+    Each token gets one of:
+      - "O"          — not part of any field
+      - "B-<field>"  — first token of a field span
+      - "I-<field>"  — continuation token of a field span
+
+    Conflict resolution: if spans overlap, the first-encountered field wins.
+    """
+    labels = ["O"] * len(ocr_words)
+
+    for field, span in spans.items():
+        if not span["found"]:
+            continue
+        start, end = span["start"], span["end"]
+        for i in range(start, end + 1):
+            # Only assign if not already claimed by a previous field
+            if labels[i] == "O":
+                labels[i] = f"B-{field}" if i == start else f"I-{field}"
+
+    return labels
+
+# -----------------------------------------------
+# 4. OCR Helper
 # -----------------------------------------------
 
 def run_ocr(image: Image.Image):
@@ -94,7 +127,7 @@ def run_ocr(image: Image.Image):
     return words
 
 # -----------------------------------------------
-# 4. Fuzzy Span Finder
+# 5. Fuzzy Span Finder
 # -----------------------------------------------
 
 def fuzzy_score(a: str, b: str) -> float:
@@ -142,7 +175,7 @@ def find_span(value: str, ocr_words: list, threshold=0.75):
     return None
 
 # -----------------------------------------------
-# 5. Span Annotation
+# 6. Span Annotation
 # -----------------------------------------------
 
 def annotate_spans(ocr_words: list, gt_fields: dict):
@@ -199,7 +232,7 @@ def annotate_spans(ocr_words: list, gt_fields: dict):
     return spans
 
 # -----------------------------------------------
-# 6. Process All Samples
+# 7. Process All Samples
 # -----------------------------------------------
 
 def process_dataset(df: pd.DataFrame):
@@ -230,6 +263,7 @@ def process_dataset(df: pd.DataFrame):
         words = [w["word"] for w in ocr_words]
         boxes = [w["bbox"]  for w in ocr_words]
         spans = annotate_spans(ocr_words, gt_fields)
+        bio_labels = build_bio_labels(ocr_words, spans)
 
         found   = sum(1 for s in spans.values() if s["found"])
         missing = sum(1 for s in spans.values() if not s["found"] and s["answer_text"])
@@ -249,6 +283,7 @@ def process_dataset(df: pd.DataFrame):
                 "start_idx":    span["start"],   # word-level index
                 "end_idx":      span["end"],      # word-level index
                 "found":        span["found"],
+                "bio_labels":   bio_labels,       # typed BIO tags for all tokens
             })
 
         print(f"  Sample {idx:3d}: {len(words):4d} words | "
